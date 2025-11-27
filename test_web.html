@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F1 Telemetry Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #output {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>F1 Telemetry Web API Test</h1>
+    
+    <div class="test-section">
+        <h3>API Tests</h3>
+        <button onclick="testYears()">Test Get Years</button>
+        <button onclick="testEvents()">Test Get Events (2023)</button>
+        <button onclick="testRace()">Test Get Race Data</button>
+        <button onclick="testTelemetry()">Test Get Telemetry</button>
+    </div>
+
+    <div class="test-section">
+        <h3>Output</h3>
+        <div id="output">Ready to test...</div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        
+        function log(message) {
+            const output = document.getElementById('output');
+            output.textContent += new Date().toLocaleTimeString() + ': ' + message + '\n';
+            output.scrollTop = output.scrollHeight;
+        }
+
+        async function testYears() {
+            try {
+                log('Testing /api/years...');
+                const response = await fetch(`${API_BASE}/years`);
+                const data = await response.json();
+                log('Years: ' + JSON.stringify(data));
+            } catch (error) {
+                log('Error: ' + error.message);
+            }
+        }
+
+        async function testEvents() {
+            try {
+                log('Testing /api/events/2023...');
+                const response = await fetch(`${API_BASE}/events/2023`);
+                const data = await response.json();
+                log('Events (first 5): ' + JSON.stringify(data.slice(0, 5)));
+            } catch (error) {
+                log('Error: ' + error.message);
+            }
+        }
+
+        async function testRace() {
+            try {
+                log('Testing /api/race/2023/Bahrain Grand Prix...');
+                const response = await fetch(`${API_BASE}/race/2023/Bahrain Grand Prix`);
+                const data = await response.json();
+                log('Race data keys: ' + JSON.stringify(Object.keys(data)));
+                log('Track bounds: x(' + data.x_min + ' to ' + data.x_max + '), y(' + data.y_min + ' to ' + data.y_max + ')');
+            } catch (error) {
+                log('Error: ' + error.message);
+            }
+        }
+
+        async function testTelemetry() {
+            try {
+                log('Testing /api/race/2023/Bahrain Grand Prix/telemetry/100...');
+                const response = await fetch(`${API_BASE}/race/2023/Bahrain Grand Prix/telemetry/100`);
+                const data = await response.json();
+                log('Telemetry data (' + data.length + ' drivers): ' + JSON.stringify(data));
+            } catch (error) {
+                log('Error: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F1 Telemetry Viewer</title>
+    <link rel="stylesheet" href="f1_styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Race Selector Overlay -->
+        <div id="selectorOverlay" class="selector-overlay">
+            <div class="selector-content">
+                <h2 class="selector-title">Select F1 Race</h2>
+                <div class="selector-group">
+                    <label class="selector-label">Year:</label>
+                    <select id="yearSelect" class="selector-dropdown">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+                <div class="selector-group">
+                    <label class="selector-label">Race:</label>
+                    <select id="raceSelect" class="selector-dropdown" disabled>
+                        <option value="">Select a year first</option>
+                    </select>
+                </div>
+                <button id="loadRaceBtn" class="selector-btn" disabled>Load Race</button>
+            </div>
+        </div>
+
+        <!-- Main Race Interface -->
+        <div class="header">
+            <div class="race-title" id="raceTitle">Select a Race</div>
+            <div class="race-info">
+                <div class="info-item">
+                    <div class="info-label">TIME</div>
+                    <div class="info-value" id="raceTime">00:00:00</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">SPEED</div>
+                    <div class="info-value" id="raceSpeed">1.0x</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">DRIVERS</div>
+                    <div class="info-value" id="driverCount">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="race-view">
+            <canvas id="raceCanvas"></canvas>
+            <div class="loading" id="loadingMsg" style="display: none;">Loading race data...</div>
+            <div class="error" id="errorMsg" style="display: none;"></div>
+            
+            <div class="driver-list" id="driverList" style="display: none;">
+                <h3 style="margin-bottom: 10px; color: #e10600;">Drivers</h3>
+                <div id="driverItems"></div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="speed-control">
+                <button class="control-btn" id="slowBtn" disabled>&lt;&lt; Slower</button>
+                <button class="control-btn" id="playPauseBtn" disabled>▶ Play</button>
+                <button class="control-btn" id="fastBtn" disabled>&gt;&gt; Faster</button>
+            </div>
+            <div class="lap-selector">
+                <input type="number" id="lapInput" class="lap-input" placeholder="Lap" disabled>
+                <button class="control-btn" id="goToLapBtn" disabled>Go</button>
+            </div>
+            <button class="control-btn" id="restartBtn" disabled>↻ Restart</button>
+            <button class="control-btn" id="changeRaceBtn">Change Race</button>
+        </div>
+    </div>
+
+    <script>
+        class F1TelemetryViewer {
+            constructor() {
+                this.canvas = document.getElementById('raceCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.currentRace = null;
+                this.raceData = null;
+                this.telemetryData = [];
+                this.previousTelemetryData = {};
+                this.raceTime = 0;
+                this.playbackSpeed = 1.0;
+                this.isPlaying = false;
+                this.animationId = null;
+                this.lastUpdateTime = 0;
+                this.interpolationProgress = 0;
+                this.telemetryTimestamp = 0;
+                this.isLoadingTelemetry = false;
+                
+                this.driverColors = [
+                    '#e10600', '#00d2be', '#0600ef', '#ff6800', 
+                    '#006f62', '#900000', '#ff87bc', '#005aff',
+                    '#ffffff', '#c92d4b', '#2b4562', '#358c75',
+                    '#ff1e00', '#6692ff', '#00e701', '#005d2c',
+                    '#ffcd00', '#ff8700', '#005eff', '#939598'
+                ];
+
+                this.init();
+                this.setupEventListeners();
+                this.resizeCanvas();
+                this.loadYears();
+            }
+
+            init() {
+                // Resize canvas to match display size
+                window.addEventListener('resize', () => this.resizeCanvas());
+            }
+
+            resizeCanvas() {
+                const rect = this.canvas.getBoundingClientRect();
+                this.canvas.width = rect.width * devicePixelRatio;
+                this.canvas.height = rect.height * devicePixelRatio;
+                this.ctx.scale(devicePixelRatio, devicePixelRatio);
+                this.canvas.style.width = rect.width + 'px';
+                this.canvas.style.height = rect.height + 'px';
+                
+                if (this.raceData) {
+                    this.draw();
+                }
+            }
+
+            setupEventListeners() {
+                document.getElementById('yearSelect').addEventListener('change', (e) => {
+                    if (e.target.value) {
+                        this.loadEvents(e.target.value);
+                    }
+                });
+
+                document.getElementById('raceSelect').addEventListener('change', (e) => {
+                    document.getElementById('loadRaceBtn').disabled = !e.target.value;
+                });
+
+                document.getElementById('loadRaceBtn').addEventListener('click', () => {
+                    const year = document.getElementById('yearSelect').value;
+                    const race = document.getElementById('raceSelect').value;
+                    if (year && race) {
+                        this.loadRace(year, race);
+                        document.getElementById('selectorOverlay').style.display = 'none';
+                    }
+                });
+
+                document.getElementById('playPauseBtn').addEventListener('click', () => {
+                    this.togglePlayback();
+                });
+
+                document.getElementById('slowBtn').addEventListener('click', () => {
+                    this.changeSpeed(false);
+                });
+
+                document.getElementById('fastBtn').addEventListener('click', () => {
+                    this.changeSpeed(true);
+                });
+
+                document.getElementById('restartBtn').addEventListener('click', () => {
+                    this.restart();
+                });
+
+                document.getElementById('goToLapBtn').addEventListener('click', () => {
+                    this.goToLap();
+                });
+
+                document.getElementById('changeRaceBtn').addEventListener('click', () => {
+                    document.getElementById('selectorOverlay').style.display = 'flex';
+                });
+            }
+
+            async loadYears() {
+                try {
+                    const response = await fetch('/api/years');
+                    const years = await response.json();
+                    const select = document.getElementById('yearSelect');
+                    select.innerHTML = '<option value="">Select Year</option>';
+                    years.forEach(year => {
+                        const option = document.createElement('option');
+                        option.value = year;
+                        option.textContent = year;
+                        select.appendChild(option);
+                    });
+                } catch (error) {
+                    console.error('Error loading years:', error);
+                }
+            }
+
+            async loadEvents(year) {
+                try {
+                    const response = await fetch(`/api/events/${year}`);
+                    const events = await response.json();
+                    const select = document.getElementById('raceSelect');
+                    select.innerHTML = '<option value="">Select Race</option>';
+                    select.disabled = false;
+                    
+                    if (Array.isArray(events)) {
+                        events.forEach(event => {
+                            const option = document.createElement('option');
+                            option.value = event;
+                            option.textContent = event;
+                            select.appendChild(option);
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error loading events:', error);
+                }
+            }
+
+            async loadRace(year, race) {
+                this.showLoading(true);
+                try {
+                    const response = await fetch(`/api/race/${year}/${encodeURIComponent(race)}`);
+                    if (!response.ok) throw new Error('Failed to load race data');
+                    
+                    this.raceData = await response.json();
+                    this.currentRace = { year, race };
+                    this.raceTime = 0;
+                    this.telemetryTimestamp = 0;
+                    this.telemetryData = [];
+                    this.previousTelemetryData = {};
+
+                    document.getElementById('raceTitle').textContent = `${year} ${race}`;
+                    this.enableControls();
+                    this.showLoading(false);
+                    
+                    await this.loadTelemetryData();
+                    this.draw();
+                    
+                } catch (error) {
+                    console.error('Error loading race:', error);
+                    this.showError('Failed to load race data');
+                }
+            }
+
+            async loadTelemetryData() {
+                if (!this.currentRace) return;
+                const secondToLoad = Math.floor(this.raceTime);
+
+                try {
+                    const response = await fetch(
+                        `/api/race/${this.currentRace.year}/${encodeURIComponent(this.currentRace.race)}/telemetry/${secondToLoad}`
+                    );
+                    
+                    if (response.ok) {
+                        const newTelemetryData = await response.json();
+                        const isFirstLoad = this.telemetryData.length === 0;
+
+                        if (!isFirstLoad) {
+                            this.previousTelemetryData = this.telemetryData.reduce((acc, driver) => {
+                                acc[driver.driver_number] = { x: driver.x, y: driver.y };
+                                return acc;
+                            }, {});
+                        }
+
+                        this.telemetryData = newTelemetryData;
+                        this.telemetryTimestamp = secondToLoad;
+
+                        if (isFirstLoad) {
+                            this.previousTelemetryData = this.telemetryData.reduce((acc, driver) => {
+                                acc[driver.driver_number] = { x: driver.x, y: driver.y };
+                                return acc;
+                            }, {});
+                        }
+
+                        this.updateDriverList();
+                    }
+                } catch (error) {
+                    console.error('Error loading telemetry:', error);
+                }
+            }
+
+            updateDriverList() {
+                const driverItems = document.getElementById('driverItems');
+                const driverList = document.getElementById('driverList');
+                
+                if (this.telemetryData.length > 0) {
+                    driverList.style.display = 'block';
+                    driverItems.innerHTML = '';
+                    
+                    const sortedDrivers = [...this.telemetryData].sort((a, b) => {
+                        if (a.lap !== b.lap) {
+                            return b.lap - a.lap;
+                        }
+                        return b.distance - a.distance;
+                    });
+
+                    sortedDrivers.forEach((driver, index) => {
+                        const item = document.createElement('div');
+                        item.className = 'driver-item';
+                        
+                        const originalIndex = this.telemetryData.findIndex(d => d.driver_number === driver.driver_number);
+                        const color = this.driverColors[originalIndex % this.driverColors.length];
+                        item.innerHTML = `
+                            <div style="padding: 0 10px; font-weight: bold; color: #fff;">${index + 1}</div>
+                            <div class="driver-color" style="background-color: ${color}"></div>
+                            <div class="driver-info">
+                                <div class="driver-abbr">${driver.abbreviation || driver.driver_number}</div>
+                                <div class="driver-lap">Lap ${driver.lap}</div>
+                            </div>
+                        `;
+                        driverItems.appendChild(item);
+                    });
+                }
+                
+                document.getElementById('driverCount').textContent = this.telemetryData.length;
+            }
+
+            draw() {
+                if (!this.raceData) return;
+                
+                const rect = this.canvas.getBoundingClientRect();
+                this.ctx.clearRect(0, 0, rect.width, rect.height);
+                
+                // Enhanced gradient background
+                const gradient = this.ctx.createRadialGradient(
+                    rect.width/2, rect.height/2, 0,
+                    rect.width/2, rect.height/2, Math.max(rect.width, rect.height)/2
+                );
+                gradient.addColorStop(0, '#0a0a0a');
+                gradient.addColorStop(1, '#000000');
+                this.ctx.fillStyle = gradient;
+                this.ctx.fillRect(0, 0, rect.width, rect.height);
+                
+                // Calculate transformation
+                const { x_min, x_max, y_min, y_max } = this.raceData;
+                const trackRotatedWidth = y_max - y_min;
+                const trackRotatedHeight = x_max - x_min;
+
+                if (trackRotatedWidth <= 0 || trackRotatedHeight <= 0) return;
+                
+                const padding = 50;
+                const scaleX = (rect.width - padding * 2) / trackRotatedWidth;
+                const scaleY = (rect.height - padding * 2) / trackRotatedHeight;
+                const scale = Math.min(scaleX, scaleY);
+                
+                const offsetX = (rect.width - trackRotatedWidth * scale) / 2;
+                const offsetY = (rect.height - trackRotatedHeight * scale) / 2;
+                
+                const transform = (x, y) => ({
+                    x: (y - y_min) * scale + offsetX,
+                    y: (x - x_min) * scale + offsetY
+                });
+                
+                // Draw track boundaries with glow effect
+                this.ctx.shadowColor = '#ffffff';
+                this.ctx.shadowBlur = 5;
+                this.ctx.strokeStyle = '#ffffff';
+                this.ctx.lineWidth = 3;
+                this.ctx.lineCap = 'round';
+                this.ctx.lineJoin = 'round';
+                
+                // Left boundary
+                if (this.raceData.track_left_boundary && this.raceData.track_left_boundary.length > 1) {
+                    this.ctx.beginPath();
+                    this.raceData.track_left_boundary.forEach((point, index) => {
+                        const pos = transform(point[0], point[1]);
+                        if (index === 0) {
+                            this.ctx.moveTo(pos.x, pos.y);
+                        } else {
+                            this.ctx.lineTo(pos.x, pos.y);
+                        }
+                    });
+                    this.ctx.stroke();
+                }
+                
+                // Right boundary
+                if (this.raceData.track_right_boundary && this.raceData.track_right_boundary.length > 1) {
+                    this.ctx.beginPath();
+                    this.raceData.track_right_boundary.forEach((point, index) => {
+                        const pos = transform(point[0], point[1]);
+                        if (index === 0) {
+                            this.ctx.moveTo(pos.x, pos.y);
+                        } else {
+                            this.ctx.lineTo(pos.x, pos.y);
+                        }
+                    });
+                    this.ctx.stroke();
+                }
+                
+                // Reset shadow for drivers
+                this.ctx.shadowBlur = 0;
+                
+                // Draw drivers with enhanced visuals and smooth interpolation
+                this.telemetryData.forEach((driver, index) => {
+                    let currentPos = { x: driver.x, y: driver.y };
+                    const prevData = this.previousTelemetryData[driver.driver_number];
+
+                    if (prevData) {
+                        const t = Math.min(1.0, Math.max(0.0, this.interpolationProgress));
+                        const easedT = t * t * (3.0 - 2.0 * t);
+                        
+                        currentPos = {
+                            x: prevData.x + (driver.x - prevData.x) * easedT,
+                            y: prevData.y + (driver.y - prevData.y) * easedT
+                        };
+                    }
+                    
+                    const pos = transform(currentPos.x, currentPos.y);
+                    const color = this.driverColors[index % this.driverColors.length];
+                    
+                    // Draw car with glow effect
+                    this.ctx.shadowColor = color;
+                    this.ctx.shadowBlur = 10;
+                    this.ctx.fillStyle = color;
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x, pos.y, 10, 0, 2 * Math.PI);
+                    this.ctx.fill();
+                    
+                    // Draw inner highlight
+                    this.ctx.shadowBlur = 0;
+                    this.ctx.fillStyle = '#ffffff';
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x - 2, pos.y - 2, 3, 0, 2 * Math.PI);
+                    this.ctx.fill();
+                    
+                    // Draw driver label with background
+                    const text = driver.abbreviation || driver.driver_number;
+                    this.ctx.font = 'bold 12px Arial';
+                    const textMetrics = this.ctx.measureText(text);
+                    
+                    // Text background
+                    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                    this.ctx.fillRect(pos.x + 15, pos.y - 8, textMetrics.width + 4, 16);
+                    
+                    // Text
+                    this.ctx.fillStyle = '#ffffff';
+                    this.ctx.textAlign = 'left';
+                    this.ctx.fillText(text, pos.x + 17, pos.y + 4);
+                });
+            }
+
+            togglePlayback() {
+                this.isPlaying = !this.isPlaying;
+                const btn = document.getElementById('playPauseBtn');
+                
+                if (this.isPlaying) {
+                    btn.textContent = '⏸ Pause';
+                    this.startAnimation();
+                } else {
+                    btn.textContent = '▶ Play';
+                    this.stopAnimation();
+                }
+            }
+
+            startAnimation() {
+                this.lastUpdateTime = performance.now();
+                this.animate();
+            }
+
+            stopAnimation() {
+                if (this.animationId) {
+                    cancelAnimationFrame(this.animationId);
+                    this.animationId = null;
+                }
+            }
+
+            animate() {
+                if (!this.isPlaying) return;
+                
+                const currentTime = performance.now();
+                const deltaTime = (currentTime - this.lastUpdateTime) / 1000;
+                this.lastUpdateTime = currentTime;
+                
+                this.raceTime += deltaTime * this.playbackSpeed;
+
+                // Cap raceTime at total_race_time to prevent it from going past the end of the race
+                if (this.raceData && this.raceTime > this.raceData.total_race_time) {
+                    this.raceTime = this.raceData.total_race_time; // Cap it
+                    this.isPlaying = false; // Stop playback
+                    document.getElementById('playPauseBtn').textContent = '▶ Play';
+                }
+
+                const currentRaceTimeSecond = Math.floor(this.raceTime);
+
+                if (currentRaceTimeSecond > this.telemetryTimestamp && !this.isLoadingTelemetry) {
+                    this.isLoadingTelemetry = true;
+                    this.loadTelemetryData().then(() => {
+                        this.isLoadingTelemetry = false;
+                    });
+                }
+                
+                this.interpolationProgress = this.raceTime - this.telemetryTimestamp;
+                
+                this.updateTimeDisplay();
+                this.draw();
+                
+                this.animationId = requestAnimationFrame(() => this.animate());
+            }
+
+            changeSpeed(faster) {
+                if (faster) {
+                    this.playbackSpeed *= 1.5;
+                } else {
+                    this.playbackSpeed /= 1.5;
+                }
+                if (this.playbackSpeed < 0.25) {
+                    this.playbackSpeed = 0.25;
+                }
+                document.getElementById('raceSpeed').textContent = `${this.playbackSpeed.toFixed(1)}x`;
+            }
+
+            async goToLap() {
+                const lapNumber = parseInt(document.getElementById('lapInput').value);
+                if (!this.currentRace || isNaN(lapNumber) || lapNumber <= 0) {
+                    return;
+                }
+
+                try {
+                    const response = await fetch(
+                        `/api/race/${this.currentRace.year}/${encodeURIComponent(this.currentRace.race)}/lap/${lapNumber}`
+                    );
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.raceTime = data.lap_start_time;
+                        this.telemetryTimestamp = this.raceTime;
+                        await this.loadTelemetryData();
+                        this.updateTimeDisplay();
+                    } else {
+                        console.error('Error fetching lap start time');
+                    }
+                } catch (error) {
+                    console.error('Error in goToLap:', error);
+                }
+            }
+
+            restart() {
+                this.raceTime = 0;
+                this.updateTimeDisplay();
+                this.loadTelemetryData();
+            }
+
+            updateTimeDisplay() {
+                const minutes = Math.floor(this.raceTime / 60);
+                const seconds = Math.floor(this.raceTime % 60);
+                const time = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                document.getElementById('raceTime').textContent = time;
+            }
+
+            enableControls() {
+                document.getElementById('playPauseBtn').disabled = false;
+                document.getElementById('slowBtn').disabled = false;
+                document.getElementById('fastBtn').disabled = false;
+                document.getElementById('restartBtn').disabled = false;
+                document.getElementById('lapInput').disabled = false;
+                document.getElementById('goToLapBtn').disabled = false;
+            }
+
+            showLoading(show) {
+                document.getElementById('loadingMsg').style.display = show ? 'block' : 'none';
+            }
+
+            showError(message) {
+                const errorMsg = document.getElementById('errorMsg');
+                errorMsg.textContent = message;
+                errorMsg.style.display = 'block';
+                this.showLoading(false);
+            }
+        }
+
+        // Initialize the application
+        window.addEventListener('DOMContentLoaded', () => {
+            new F1TelemetryViewer();
+        });
+    </script>
+</body>
+</html>
